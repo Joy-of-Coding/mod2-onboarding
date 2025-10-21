@@ -39,39 +39,31 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const body = context.payload.issue.body || "";
-            
-            // Try to match both Markdown and YAML issue form formats
-            const usernameRegex = /ghuser[:=]?\s*"?([A-Za-z0-9-]+)"?/i;
-            const emailRegex = /email[:=]?\s*"?([^\s"<>@]+@[^\s"<>@]+)"?/i;
+            const lines = body.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-            let username = null;
-            let email = null;
+            let username = "";
+            let email = "";
 
-            // 1. Try regex parse
-            const uMatch = body.match(usernameRegex);
-            if (uMatch) username = uMatch[1].trim();
-
-            const eMatch = body.match(emailRegex);
-            if (eMatch) email = eMatch[1].trim();
-
-            // 2. Fallback: use raw body lines (GitHub sometimes changes template formatting)
-            if (!username) {
-              const lines = body.split('\n');
-              for (const line of lines) {
-                if (line.toLowerCase().includes('github username')) {
-                  username = line.split(':').pop().trim().replace(/^@/, '');
-                  break;
-                }
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].toLowerCase();
+              if (line.includes("github username")) {
+                username = lines[i + 1]?.replace(/^@/, "").trim();
+              }
+              if (line.includes("email")) {
+                const possible = lines[i + 1]?.trim();
+                if (possible && possible.includes("@")) email = possible;
               }
             }
 
             if (!username) {
-              core.setFailed("No GitHub username provided.");
+              core.setFailed(`Could not resolve username — parsed issue:\n${body}`);
               return;
             }
 
-            core.setOutput('username', username);
-            core.setOutput('email', email || '');
+            core.info(`Parsed username: ${username}`);
+            core.info(`Parsed email: ${email || "(none)"}`);
+            core.setOutput("username", username);
+            core.setOutput("email", email);
 
 
       - name: Check if user is already in org
