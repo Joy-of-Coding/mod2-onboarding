@@ -1,5 +1,5 @@
-name: Request to join Joy of Coding Admissions
-description: Request to join the team and gain project board access
+name: Request to join Team
+description: Request to join the organization team with access to the project board
 title: "Join request: @<your-username>"
 labels: ["join-request"]
 body:
@@ -7,6 +7,14 @@ body:
     id: ghuser
     attributes:
       label: Your GitHub username
+      description: "Example: octocat (no @)"
       placeholder: "octocat"
     validations:
       required: true
+  - type: input
+    id: email
+    attributes:
+      label: Your email (optional)
+      placeholder: "you@example.com"
+    validations:
+      required: false

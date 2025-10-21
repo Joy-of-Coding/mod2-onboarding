@@ -1,4 +1,4 @@
-name: Auto add to team and project
+name: Auto-join AdmissionsTeam
 on:
   issues:
     types: [opened, labeled]
@@ -7,95 +7,114 @@ permissions:
   issues: write
 
 jobs:
-  process:
+  join:
+    if: |
+      github.event.action == 'opened' || 
+      (github.event.action == 'labeled' && contains(github.event.issue.labels.*.name, 'join-request'))
     runs-on: ubuntu-latest
     steps:
-      - name: Parse username
+      - name: Ensure required secrets
+        run: |
+          test -n "${{ secrets.ORG }}" && test -n "${{ secrets.TEAM_SLUG }}" || { echo "Missing ORG or TEAM_SLUG"; exit 1; }
+
+      # If using a GitHub App (recommended), create an installation token first:
+      - name: Generate GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ secrets.ORG }}
+
+      - name: Extract form inputs
         id: parse
         uses: actions/github-script@v7
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const body = context.payload.issue.body || "";
-            const match = body.match(/ghuser.*value:\s*"?([A-Za-z0-9-]+)"?/);
-            if (!match) core.setFailed("No username found");
-            core.setOutput('username', match[1].trim());
+            const uMatch = body.match(/ghuser.*\n.*value:\s*"?([A-Za-z0-9-]+)"?/);
+            const eMatch = body.match(/email.*\n.*value:\s*"?([^"\n]+)"?/);
+            const username = uMatch ? uMatch[1].trim() : null;
+            const email = eMatch ? eMatch[1].trim() : null;
+            if (!username) {
+              core.setFailed("No GitHub username provided.");
+            }
+            core.setOutput('username', username);
+            core.setOutput('email', email || '');
 
-      - name: Add to team
+      - name: Check if user is already in org
+        id: check-member
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const org = process.env.ORG;
-            const team = process.env.TEAM_SLUG;
             const username = '${{ steps.parse.outputs.username }}';
-            await github.request('PUT /orgs/{org}/teams/{team_slug}/memberships/{username}', {
+            try {
+              await github.request('GET /orgs/{org}/members/{username}', { org, username });
+              core.setOutput('isMember', 'true'); // 204 means member
+            } catch (e) {
+              core.setOutput('isMember', 'false'); // 404 not a member
+            }
+        env:
+          ORG: ${{ secrets.ORG }}
+
+      - name: Invite to org if needed
+        if: steps.check-member.outputs.isMember == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const org = process.env.ORG;
+            const username = '${{ steps.parse.outputs.username }}';
+            const email = '${{ steps.parse.outputs.email }}';
+            // Get user id if we have a username
+            let invitee_id = null;
+            if (username) {
+              const user = await github.request('GET /users/{username}', { username });
+              invitee_id = user.data.id;
+            }
+            // Create org invitation
+            await github.request('POST /orgs/{org}/invitations', {
               org,
-              team_slug: team,
-              username,
+              invitee_id, // prefer ID
+              email: email || undefined
+            });
+        env:
+          ORG: ${{ secrets.ORG }}
+
+      - name: Add/update team membership
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const org = process.env.ORG;
+            const team_slug = process.env.TEAM_SLUG;
+            const username = '${{ steps.parse.outputs.username }}';
+            // This works even if the user is pending org invitation; they'll land in "pending" until they accept
+            await github.request('PUT /orgs/{org}/teams/{team_slug}/memberships/{username}', {
+              org, team_slug, username,
               role: 'member'
             });
         env:
           ORG: ${{ secrets.ORG }}
           TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
 
-    #   - name: Check if team already has access to project board
-    #     id: check-access
-    #     uses: actions/github-script@v7
-    #     with:
-    #       github-token: ${{ secrets.GH_TOKEN }}
-    #       script: |
-    #         const org = process.env.ORG;
-    #         const projectId = process.env.PROJECT_ID;
-    #         const teamSlug = process.env.TEAM_SLUG;
-
-    #         console.log(`Checking project access for team ${teamSlug}...`);
-    #         try {
-    #           const res = await github.request('GET /orgs/{org}/projects/{project_id}/teams', {
-    #             org,
-    #             project_id: projectId,
-    #           });
-    #           const hasAccess = res.data.some(t => t.slug === teamSlug);
-    #           core.setOutput('hasAccess', hasAccess);
-    #           console.log(`Team already has access: ${hasAccess}`);
-    #         } catch (error) {
-    #           console.log('Error fetching project teams:', error.message);
-    #           core.setOutput('hasAccess', false);
-    #         }
-    #     env:
-    #       ORG: ${{ secrets.ORG }}
-    #       PROJECT_ID: ${{ secrets.PROJECT_ID }}
-    #       TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
-
-    #   - name: Grant team project board access (only if needed)
-    #     if: steps.check-access.outputs.hasAccess == 'false'
-    #     uses: actions/github-script@v7
-    #     with:
-    #       github-token: ${{ secrets.GH_TOKEN }}
-    #       script: |
-    #         const org = process.env.ORG;
-    #         const projectId = process.env.PROJECT_ID;
-    #         const teamSlug = process.env.TEAM_SLUG;
-
-    #         console.log(`Granting write access to team ${teamSlug} for project ${projectId}...`);
-    #         await github.request('PUT /orgs/{org}/projects/{project_id}/teams/{team_slug}', {
-    #           org,
-    #           project_id: projectId,
-    #           team_slug: teamSlug,
-    #           permission: 'write'
-    #         });
-    #     env:
-    #       ORG: ${{ secrets.ORG }}
-    #       PROJECT_ID: ${{ secrets.PROJECT_ID }}
-    #       TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
-
-      - name: Comment success
+      - name: Comment status
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const username = '${{ steps.parse.outputs.username }}';
+            const isMember = '${{ steps.check-member.outputs.isMember }}' === 'true';
+            const note = isMember
+              ? `✅ @${username} is in the org. Added/updated their membership in **${process.env.TEAM_SLUG}**.`
+              : `✉️ Invited @${username} to the org and added them to **${process.env.TEAM_SLUG}** (will activate after they accept).`;
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: context.issue.number,
-              body: `✅ @${username} has been added to the Admissions team and granted access to the [Admissions Project Board](https://github.com/orgs/Joy-of-Coding/projects/7).`
+              body: note
             });
+        env:
+          TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
