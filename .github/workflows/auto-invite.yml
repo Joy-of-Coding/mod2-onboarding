@@ -53,14 +53,14 @@ jobs:
             const username = '${{ steps.parse.outputs.username }}';
             try {
               await github.request('GET /orgs/{org}/members/{username}', { org, username });
-              core.setOutput('isMember', 'true'); // 204 means member
+              core.setOutput('isMember', 'true');
             } catch (e) {
-              core.setOutput('isMember', 'false'); // 404 not a member
+              core.setOutput('isMember', 'false');
             }
         env:
           ORG: ${{ secrets.ORG }}
 
-      - name: Invite to org if needed
+      - name: Invite user to organization if not a member
         if: steps.check-member.outputs.isMember == 'false'
         uses: actions/github-script@v7
         with:
@@ -69,22 +69,25 @@ jobs:
             const org = process.env.ORG;
             const username = '${{ steps.parse.outputs.username }}';
             const email = '${{ steps.parse.outputs.email }}';
-            // Get user id if we have a username
+            
             let invitee_id = null;
-            if (username) {
+            try {
               const user = await github.request('GET /users/{username}', { username });
               invitee_id = user.data.id;
+            } catch (err) {
+              console.log(`Could not fetch user ID for ${username}: ${err}`);
             }
-            // Create org invitation
-            await github.request('POST /orgs/{org}/invitations', {
-              org,
-              invitee_id, // prefer ID
-              email: email || undefined
-            });
+
+            const params = { org };
+            if (invitee_id) params.invitee_id = invitee_id;
+            if (email) params.email = email;
+
+            const res = await github.request('POST /orgs/{org}/invitations', params);
+            core.info(`Invitation created: ${res.status}`);
         env:
           ORG: ${{ secrets.ORG }}
 
-      - name: Add/update team membership
+      - name: Add user to team (pending if not yet accepted)
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -92,11 +95,13 @@ jobs:
             const org = process.env.ORG;
             const team_slug = process.env.TEAM_SLUG;
             const username = '${{ steps.parse.outputs.username }}';
-            // This works even if the user is pending org invitation; they'll land in "pending" until they accept
+
             await github.request('PUT /orgs/{org}/teams/{team_slug}/memberships/{username}', {
               org, team_slug, username,
               role: 'member'
             });
+
+            core.info(`Added ${username} to team ${team_slug}.`);
         env:
           ORG: ${{ secrets.ORG }}
           TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
@@ -109,8 +114,8 @@ jobs:
             const username = '${{ steps.parse.outputs.username }}';
             const isMember = '${{ steps.check-member.outputs.isMember }}' === 'true';
             const note = isMember
-              ? `✅ @${username} is in the org. Added/updated their membership in **${process.env.TEAM_SLUG}**.`
-              : `✉️ Invited @${username} to the org and added them to **${process.env.TEAM_SLUG}** (will activate after they accept).`;
+              ? `✅ @${username} is already a member. Team access confirmed.`
+              : `✉️ Invited @${username} to the org and added them to **${process.env.TEAM_SLUG}**. They’ll be active once they accept the org invite.`;
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: context.issue.number,
