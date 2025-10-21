@@ -17,19 +17,13 @@ jobs:
         run: |
           test -n "${{ secrets.ORG }}" && test -n "${{ secrets.TEAM_SLUG }}" || { echo "Missing ORG or TEAM_SLUG"; exit 1; }
 
-      # If using a GitHub App (recommended), create an installation token first:
-      - name: Generate GitHub App installation token
+      - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ secrets.ORG }}
-      - name: Debug installation scope
-        run: |
-          curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/installation | jq '.account.login, .repository_selection'
 
 
       - name: Extract form inputs
@@ -38,32 +32,13 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const body = context.payload.issue.body || "";
-            const lines = body.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-            let username = "";
-            let email = "";
-
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i].toLowerCase();
-              if (line.includes("github username")) {
-                username = lines[i + 1]?.replace(/^@/, "").trim();
+              const body = context.payload.issue.body || "";
+              const match = body.match(/username\s*\n.*value:\s*"?([A-Za-z0-9-]+)"?/i);
+              if (!match) {
+              core.setFailed("No GitHub username provided.");
+              } else {
+              core.setOutput("username", match[1].trim());
               }
-              if (line.includes("email")) {
-                const possible = lines[i + 1]?.trim();
-                if (possible && possible.includes("@")) email = possible;
-              }
-            }
-
-            if (!username) {
-              core.setFailed(`Could not resolve username — parsed issue:\n${body}`);
-              return;
-            }
-
-            core.info(`Parsed username: ${username}`);
-            core.info(`Parsed email: ${email || "(none)"}`);
-            core.setOutput("username", username);
-            core.setOutput("email", email);
 
 
       - name: Check if user is already in org
@@ -92,27 +67,15 @@ jobs:
           script: |
             const org = process.env.ORG;
             const username = '${{ steps.parse.outputs.username }}';
-            const email = '${{ steps.parse.outputs.email }}';
-            let invitee_id = null;
+            
+            l// Get user ID
+            const { data: user } = await github.request('GET /users/{username}', { username });
+            const invitee_id = user.id;
 
-            // Try to get user ID from username
-            try {
-              const user = await github.request('GET /users/{username}', { username });
-              invitee_id = user.data.id;
-              core.info(`Found user ID for ${username}: ${invitee_id}`);
-            } catch (err) {
-              core.warning(`Could not resolve username ${username}: ${err.message}`);
-            }
-
-            // Create org invitation
-            const params = { org };
-            if (invitee_id) params.invitee_id = invitee_id;
-            else if (email) params.email = email;
-            else core.setFailed('Cannot invite: missing both GitHub username and email.');
-
-            const res = await github.request('POST /orgs/{org}/invitations', params);
-            core.info(`Invitation created. Response: ${res.status}`);
-            core.setOutput('invited', 'true');
+            await github.request('POST /orgs/{org}/invitations', {
+              org,
+              invitee_id
+            });
         env:
           ORG: ${{ secrets.ORG }}
 
@@ -140,4 +103,27 @@ jobs:
         env:
           ORG: ${{ secrets.ORG }}
           TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
+
+      - name: Comment status and close
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const username = '${{ steps.parse.outputs.username }}';
+            const isMember = '${{ steps.check-member.outputs.isMember }}' === 'true';
+            const note = isMember
+              ? `✅ @${username} was already in the org and has been added to the team.`
+              : `✉️ @${username} has been invited to the org and added to the team. Once they accept, their membership will activate.`;
+
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: note
+            });
+
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });
 
