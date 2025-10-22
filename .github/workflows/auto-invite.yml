@@ -37,9 +37,9 @@ jobs:
 
             let username = "";
             for (let i = 0; i < lines.length; i++) {
-              if (lines[i].toLowerCase().includes("github username")) {
+              const line = lines[i].toLowerCase();
+              if (line.includes("github username")) {
                 username = lines[i + 1]?.replace(/^@/, "").trim();
-                break;
               }
             }
 
