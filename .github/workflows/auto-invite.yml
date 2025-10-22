@@ -32,13 +32,24 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-              const body = context.payload.issue.body || "";
-              const match = body.match(/username\s*\n.*value:\s*"?([A-Za-z0-9-]+)"?/i);
-              if (!match) {
-              core.setFailed("No GitHub username provided.");
-              } else {
-              core.setOutput("username", match[1].trim());
+            const body = context.payload.issue.body || "";
+            const lines = body.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+            let username = "";
+            for (let i = 0; i < lines.length; i++) {
+              if (lines[i].toLowerCase().includes("github username")) {
+                username = lines[i + 1]?.replace(/^@/, "").trim();
+                break;
               }
+            }
+
+            if (!username) {
+              core.setFailed(`Could not resolve username — parsed issue:\n${body}`);
+              return;
+            }
+
+            core.info(`Parsed username: ${username}`);
+            core.setOutput("username", username);
 
 
       - name: Check if user is already in org
