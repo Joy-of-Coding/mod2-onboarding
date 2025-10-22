@@ -79,7 +79,7 @@ jobs:
             const org = process.env.ORG;
             const username = '${{ steps.parse.outputs.username }}';
             
-            l// Get user ID
+            // Get user ID
             const { data: user } = await github.request('GET /users/{username}', { username });
             const invitee_id = user.id;
 
