@@ -7,9 +7,9 @@ body:
     attributes:
       value: |
         **Welcome!**  
-        Please fill out this short form to request access to our organization.  
-        ⚠️ **Note:** This issue is public — only share your GitHub username.
-        You’ll receive an invite automatically once approved.
+        Please fill out this short form to join Module 2.  
+        **Note:** This issue is public — only share your GitHub username.
+        You’ll receive an invite to the email you used to signup for github automatically once approved.
 
   - type: input
     id: ghuser
