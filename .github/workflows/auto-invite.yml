@@ -104,26 +104,39 @@ jobs:
           ORG: ${{ secrets.ORG }}
           TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
 
-      - name: Comment status and close
+      - name: Comment status and close issue
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const username = '${{ steps.parse.outputs.username }}';
-            const isMember = '${{ steps.check-member.outputs.isMember }}' === 'true';
-            const note = isMember
-              ? `✅ @${username} was already in the org and has been added to the team.`
-              : `✉️ @${username} has been invited to the org and added to the team. Once they accept, their membership will activate.`;
+            const org = process.env.ORG;
+            const team_slug = process.env.TEAM_SLUG;
 
+            // Check if user is a member of the org
+            let isMember = false;
+            try {
+              await github.request('GET /orgs/{org}/members/{username}', { org, username });
+              isMember = true;
+            } catch {}
+
+            const note = isMember
+              ? `✅ @${username} is now a member of the org and has been added to **${team_slug}**.`
+              : `✉️ @${username} has been invited to the org and will be added to **${team_slug}** once they accept.`;
+
+            // Post comment
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: context.issue.number,
               body: note
             });
 
+            // Close the issue
             await github.rest.issues.update({
               ...context.repo,
               issue_number: context.issue.number,
               state: 'closed'
             });
-
+        env:
+          ORG: ${{ secrets.ORG }}
+          TEAM_SLUG: ${{ secrets.TEAM_SLUG }}
